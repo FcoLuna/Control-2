@@ -24,6 +24,7 @@ int num_estaciones=0;
 int num_estaciones_min;
 int ingresos_maximos;
 int world_size,world_rank;
+int procesadores=0;
 MPI_Init(NULL, NULL);
 MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -63,6 +64,80 @@ void remove_file()
         strcpy (f, file.c_str());
         remove(f);
     }
+}
+
+void buscar_camino_minimo()
+{
+    for(int i = 0 ; i < procesadores ; i++)
+    {
+        string cadena;
+        string variable="", file=to_string(i)+".txt";
+        char* f = new char [file.length()+1];
+        strcpy (f, file.c_str());
+        ifstream fe(f);
+        while(getline (fe,cadena))
+        {
+            for(int i = 0; i < cadena.size() ; i++)
+            {
+                if(cadena[i]==';')
+                {
+                    stringstream a(s);
+                    int x;
+                    a >> x;
+                    if(x<num_estaciones_min)
+                    {
+                        num_estaciones_min=x;
+                        variable="";
+                        for(int j = i+1 ; j<cadena.size();j++)
+                            variable+=cadena[j];
+                        camino_minimo=variable;
+                        variable="";
+                    }
+                    break;
+                }
+                else
+                    variable+=cadena[i];
+            }
+            break;
+        }
+        fe.close();
+    }
+}
+
+void reducir_camino_minimo_file()
+{
+    string cadena;
+    string variable="", file=to_string(world_rank)+".txt";
+    char* f = new char [file.length()+1];
+    strcpy (f, file.c_str());
+    ifstream fe(f);
+    while(getline (fe,cadena))
+    {
+        for(int i = 0; i < cadena.size() ; i++)
+        {
+            if(cadena[i]==';')
+            {
+                stringstream a(s);
+                int x;
+                a >> x;
+                if(x<num_estaciones_min)
+                {
+                    num_estaciones_min=x;
+                    variable="";
+                    for(int j = i+1 ; j<cadena.size();j++)
+                        variable+=cadena[j];
+                    camino_minimo=variable;
+                    variable="";
+                }
+                break;
+            }
+            else
+                variable+=cadena[i];
+        }
+    }
+    fe.close();
+    ofstream fs(file.c_str(), ios::trunc);
+    fs<<to_string(num_estaciones_min)<<";"<<camino_minimo<<"\n";
 }
 
 // estructura Lista
@@ -207,13 +282,13 @@ void recorrer_arbol2(Lista inicio, int origen, string estacion_inicial, string e
     {
         if(inicio->nombre==estacion_final)
         {
-            // Crear archivo que escriba los resultados, wordl_rank.txt
-            if(num_recorrido < num_estaciones_min)
-            {
-                camino=camino+" - "+inicio->nombre;
-                camino_minimo=camino;
-                num_estaciones_min=num_recorrido;
-            }
+            camino=camino+" - "+inicio->nombre;
+            string file=to_string(world_rank)+".txt";
+            char* f = new char [file.length()+1];
+            strcpy (f, file.c_str());
+            ofstream fs(file.c_str(), ios::app);
+            fs<<to_string(num_recorrido)<<";"<<camino<<"\n";
+            fs.close();
         }
         else
         {
@@ -222,7 +297,7 @@ void recorrer_arbol2(Lista inicio, int origen, string estacion_inicial, string e
                     int num_camino=numero_caminos(inicio);
                     inicio->ingresos+=1;
                     if(!flag_inicial) camino=camino+" - "+inicio->nombre;
-                    if(num_camino==1 || world_rank)
+                    if(num_camino==1 || world_rank || (procesadores_usados + num_camino-1)>= world_size)
                     {
                         if(origen!=2 && inicio->p_1)recorrer_arbol2(inicio->p_1,1,estacion_inicial,estacion_final,0,num_recorrido+1,camino,0);
                         if(origen!=1 && inicio->p_2)recorrer_arbol2(inicio->p_2,2,estacion_inicial,estacion_final,0,num_recorrido+1,camino,0);
@@ -245,25 +320,26 @@ void recorrer_arbol2(Lista inicio, int origen, string estacion_inicial, string e
                                 strcpy (f, file.c_str());
                                 ofstream fs(f);
 
-                                string ini, ori=to_string(origen),num_rec=to_string(num_recorrido+1);
-                                if(origen!=2 && accesos[0] && flag){ini=inicio->p_1->codigo;accesos[0]=false;flag=false}
-                                if(origen!=1 && accesos[1] && flag){ini=inicio->p_2->codigo;accesos[1]=false;flag=false}
-                                if(origen!=4 && accesos[2] && flag){ini=inicio->p_3->codigo;accesos[2]=false;flag=false}
+                                string ini, ori,num_rec=to_string(num_recorrido+1);
+                                if(origen!=2 && accesos[0] && flag){ini=inicio->p_1->codigo;accesos[0]=false;flag=false;ori="1";}
+                                if(origen!=1 && accesos[1] && flag){ini=inicio->p_2->codigo;accesos[1]=false;flag=false;ori="2";}
+                                if(origen!=4 && accesos[2] && flag){ini=inicio->p_3->codigo;accesos[2]=false;flag=false;ori="3";}
                                 flag=true;
                                 fs<<ini<<";"<<ori<<";"<<estacion_inicial<<";"<<estacion_final<<";"<<num_rec<<";"<<camino;
                                 fs.close();
-                                /**Llamar al procesador n*/
+                                MPI_Send(1, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
                             }
                             procesadores_usados=a_crear;
-                            if(origen!=1 && accesos[1] && flag){
-                                /** Llamado a esta misma funcion con camino 2*/
+                            procesadores=procesadores_usados;
+                            if(origen!=1 && accesos[1]){
+                                recorrer_arbol2(inicio->p_2,2,estacion_inicial,estacion_final,0,num_recorrido+1,camino,0);
                             }
                             else
-                                if(origen!=4 && accesos[2] && flag){
-                                    /** Llamado a esta misma funcion con camino 3*/
+                                if(origen!=4 && accesos[2]){
+                                    recorrer_arbol2(inicio->p_3,3,estacion_inicial,estacion_final,0,num_recorrido+1,camino,0);
                                 }
                                 else{
-                                    /** Llamado a esta misma funcion con camino 4*/
+                                    recorrer_arbol2(inicio->p_4,4,estacion_inicial,estacion_final,0,num_recorrido+1,camino,0);
                                 }
                         }
                     }
@@ -316,14 +392,61 @@ void iniciar(string estacion_inicial, string estacion_final)
     if(!world_rank)
     {
         recorrer_arbol(estacion_inicial,estacion_final);
-        /** Detener todos los procesadores que están en espera, de haber (crear variable global) */
-        /** Funcion que lee todos los file y decide el camino mínimo */
-        /** Recordar que hay un límite de proc, preguntar si es que no se supera en la llamada paralela*/
+        for(int i=procesadores; i<world_size;i++)
+            MPI_Send(0, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+        reducir_camino_minimo_file();
+        buscar_camino_minimo();
         cout<<"Debe recorrer "<<num_estaciones_min<<" para llegar a su destino\n";
         cout<<camino_minimo<<endl<<endl;
     }
     else
-        /** Espera a que este rank sea llamado */
+        {
+            int dummy;
+            MPI_Recv(&dummy, 1, MPI_INT, 0, 0, MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+            if(dummy)
+            {
+                Lista l=NULL;
+                int ori,num_rec;
+                string ini, est_ini, est_fin,camino,variable="", line, file="to_"+to_string(world_rank)+".txt";
+                char* f = new char [file.length()+1];
+                strcpy (f, file.c_str());
+                ifstream file_aux (f);
+                getline (file_aux,line);
+                for(int i=0, flag=0 ; i < line.size() ; i++)
+                {
+                    if(line[i]==';')
+                    {
+                        switch(flag){
+                            case 0:
+                                ini=variable;
+                                break;
+                            case 1:
+                                stringstream a(variable);
+                                a>>ori
+                                break;
+                            case 2:
+                                est_ini=variable;
+                                break;
+                            case 3:
+                                est_fin=variable;
+                                break;
+                            case 4:
+                                stringstream a(variable);
+                                a>>num_rec;
+                                break;
+                        }
+                        flag++;
+                        variable="";
+                    }
+                    else
+                        variable+=line[i];
+                }
+                camino=variable;
+                buscar_nodo(l, ini);
+                recorrer_arbol2(l,ori,est_ini,est_fin,0,num_rec,camino,1);
+                reducir_camino_minimo_file();
+            }
+        }
 }
 
 int main(int argc, char* argv[])
